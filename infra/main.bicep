@@ -17,6 +17,7 @@ param uniqueSuffix string = uniqueString(resourceGroup().id)
 // Bygger ihop ett bas-namn + det unika suffixet till fulla resursnamn.
 var acrName = 'scanlyacr${uniqueSuffix}'
 var storageName = 'scanlystg${uniqueSuffix}'
+param placeholderImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
 // ─────────────────────────────────────────────────────────────
 // RESURS 1: Azure Container Registry (ACR)
@@ -67,5 +68,90 @@ resource invoicesContainer 'Microsoft.Storage/storageAccounts/blobServices/conta
   name: 'invoices'                // matchar exakt "invoices" i Program.cs
   properties: {
     publicAccess: 'None'         // ingen publik läsning, samma säkerhetslinje som förut
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// RESURS 3: Log Analytics Workspace
+// Container Apps Environment kräver denna för loggning/metrics.
+// ─────────────────────────────────────────────────────────────
+var logAnalyticsName = 'scanly-logs-${uniqueSuffix}'
+
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: logAnalyticsName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: 30
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RESURS 4: Container Apps Environment
+// "Huset" som Container App (rummet) placeras inuti.
+// ─────────────────────────────────────────────────────────────
+var envName = 'scanly-env-${uniqueSuffix}'
+
+resource containerAppEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
+  name: envName
+  location: location
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalytics.properties.customerId
+        sharedKey: logAnalytics.listKeys().primarySharedKey
+      }
+    }
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// RESURS 5: Container App
+// "Rummet" — själva Scanly-appen, körs inuti environment ovan.
+// Pekar initialt på en platshållar-image; pipelinen uppdaterar senare.
+// ─────────────────────────────────────────────────────────────
+var containerAppName = 'scanly-app-${uniqueSuffix}'
+
+resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
+  name: containerAppName
+  location: location
+  identity: {
+    type: 'SystemAssigned'        // Ger appen en egen Managed Identity i Entra ID
+  }
+  properties: {
+    managedEnvironmentId: containerAppEnv.id
+    configuration: {
+      ingress: {
+        external: true             // Publikt nåbar (kravet: "svarar på publik URL")
+        targetPort: 8080            // Matchar EXPOSE 8080 i er Dockerfile
+      }
+      registries: [
+        {
+          server: acr.properties.loginServer
+          identity: 'system'       // Autentiserar mot ACR via Managed Identity, ingen nyckel
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'scanlyapi'
+          image: placeholderImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+      scale: {
+        minReplicas: 2             // Kravet: minst 2 replicas
+        maxReplicas: 4
+      }
+    }
   }
 }
