@@ -155,3 +155,33 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// RBAC: ger Container Appens Managed Identity rätt att
+// 1) hämta images från ACR, 2) läsa/skriva blobs i Storage.
+// Utan dessa startar appen men får 403 vid varje Azure-anrop.
+// ─────────────────────────────────────────────────────────────
+
+// Inbyggda roll-GUID:n — fasta i hela Azure, samma för alla prenumerationer
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, containerApp.id, acrPullRoleId)   // deterministiskt unikt namn
+  scope: acr                                            // "på ACR:et"
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalId: containerApp.identity.principalId       // VEM som får rollen
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, containerApp.id, storageBlobDataContributorRoleId)
+  scope: storage                                        // "på Storage Account"
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: containerApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
