@@ -18,6 +18,7 @@ param uniqueSuffix string = uniqueString(resourceGroup().id)
 var acrName = 'scanlyacr${uniqueSuffix}'
 var storageName = 'scanlystg${uniqueSuffix}'
 param placeholderImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+param targetPort int = 8080
 
 // ─────────────────────────────────────────────────────────────
 // RESURS 1: Azure Container Registry (ACR)
@@ -128,7 +129,7 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       ingress: {
         external: true             // Publikt nåbar (kravet: "svarar på publik URL")
-        targetPort: 8080            // Matchar EXPOSE 8080 i er Dockerfile
+        targetPort: targetPort           // Matchar EXPOSE 8080 i er Dockerfile
       }
       registries: [
         {
