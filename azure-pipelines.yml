@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────
+# azure-pipelines.yml — CI/CD för Scanly API
+# Triggas vid push till main/master: bygg → testa → pusha till ACR → deploya
+# ─────────────────────────────────────────────────────────────
+
+trigger:
+  - master          # Detta kör pipelinen automatiskt vid push till denna branch
+
+pool:
+  vmImage: 'ubuntu-latest'   # Vilken typ av "agent" (tom byggmaskin) som kör pipelinen
+
+variables:
+  azureServiceConnection: 'scanly-azure-connection'   
+  acrName: 'scanlyacrb2wli3hdd2336'                     
+  imageName: 'scanlyapi'
+  containerAppName: 'scanly-app-b2wli3hdd2336'
+  resourceGroup: 'RG-Pontus-Paepke-eff47b-DotNetCloudDeveloper-VT-Mars-Goteborg'
+
+
+steps:
+  # ─────────────────────────────────────────────────────────────
+  # STEG 1: Logga in mot ACR via Service Connection
+  # ─────────────────────────────────────────────────────────────
+  - task: AzureCLI@2
+    displayName: 'Logga in mot ACR'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az acr login --name $(acrName)
+
+  # ─────────────────────────────────────────────────────────────
+  # STEG 2: Bygger Docker-imagen
+  # Samma multi-stage build som du körde lokalt.
+  # Taggen använder Build.BuildId — Azure DevOps eget löpnummer
+  # för varje körning — istället för ett hårdkodat "v1".
+  # ─────────────────────────────────────────────────────────────
+  - script: |
+      docker build -t $(acrName).azurecr.io/$(imageName):$(Build.BuildId) .
+    displayName: 'Bygg Docker-image'
+
+  # ─────────────────────────────────────────────────────────────
+  # STEG 3: Pushar imagen till ACR
+  # ─────────────────────────────────────────────────────────────
+  - script: |
+      docker push $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
+    displayName: 'Pusha till ACR'
+
+
+    # ─────────────────────────────────────────────────────────────
+  # STEG 4: Deploya till Container Apps
+  # Samma "az containerapp update" du körde manuellt förut —
+  # men nu automatiskt, med varje körnings unika tagg.
+  # ─────────────────────────────────────────────────────────────
+  - task: AzureCLI@2
+    displayName: 'Deploya till Container Apps'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az containerapp update \
+          --name $(containerAppName) \
+          --resource-group $(resourceGroup) \
+          --image $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
