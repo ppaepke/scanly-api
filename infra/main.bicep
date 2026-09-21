@@ -21,6 +21,21 @@ param placeholderImage string = 'mcr.microsoft.com/azuredocs/containerapps-hello
 param targetPort int = 8080
 
 // ─────────────────────────────────────────────────────────────
+// IDENTITET: User-Assigned Managed Identity
+// Skapas som en EGEN, fristående resurs (till skillnad från
+// SystemAssigned, som är bunden till Container App och därmed
+// skapar ett cirkulärt beroende: RBAC kan inte tilldelas förrän
+// Container App finns, men Container App validerar sin registry-
+// åtkomst redan vid skapandet → deadlock → "Operation expired").
+// ─────────────────────────────────────────────────────────────
+var identityName = 'scanly-identity-${uniqueSuffix}'
+
+resource scanlyIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: identityName
+  location: location
+}
+
+// ─────────────────────────────────────────────────────────────
 // RESURS 1: Azure Container Registry (ACR)
 // Här lagras Docker-imagen som pipelinen bygger och Container App hämtar.
 // ─────────────────────────────────────────────────────────────
@@ -110,11 +125,44 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// RBAC: ger identitetens rätt att
+// 1) hämta images från ACR, 2) läsa/skriva blobs i Storage.
+// Ligger HÄR, före Container App, eftersom scanlyIdentity redan
+// finns oberoende — RBAC behöver inte vänta på Container App.
+// ─────────────────────────────────────────────────────────────
+
+// Inbyggda roll-GUID:n — fasta i hela Azure, samma för alla prenumerationer
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, scanlyIdentity.id, acrPullRoleId)   // deterministiskt unikt namn
+  scope: acr                                              // "på ACR:et"
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalId: scanlyIdentity.properties.principalId     // VEM som får rollen
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, scanlyIdentity.id, storageBlobDataContributorRoleId)
+  scope: storage                                          // "på Storage Account"
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: scanlyIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // RESURS 5: Container App
 // "Rummet" — själva Scanly-appen, körs inuti environment ovan.
 // Pekar initialt på en platshållar-image; pipelinen uppdaterar senare.
+// dependsOn: väntar EXPLICIT på RBAC, eftersom det inte finns
+// någon naturlig referens från Container App till rolltilldelningarna
+// som Bicep annars skulle kunna räkna ut ordningen från.
 // ─────────────────────────────────────────────────────────────
 var containerAppName = 'scanly-app-${uniqueSuffix}'
 
@@ -122,19 +170,22 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: containerAppName
   location: location
   identity: {
-    type: 'SystemAssigned'        // Ger appen en egen Managed Identity i Entra ID
+    type: 'UserAssigned'                     // Använder den fristående identiteten ovan
+    userAssignedIdentities: {
+      '${scanlyIdentity.id}': {}
+    }
   }
   properties: {
     managedEnvironmentId: containerAppEnv.id
     configuration: {
       ingress: {
         external: true             // Publikt nåbar (kravet: "svarar på publik URL")
-        targetPort: targetPort           // Matchar EXPOSE 8080 i er Dockerfile
+        targetPort: targetPort     // Matchar EXPOSE 8080 i er Dockerfile
       }
       registries: [
         {
           server: acr.properties.loginServer
-          identity: 'system'       // Autentiserar mot ACR via Managed Identity, ingen nyckel
+          identity: scanlyIdentity.id   // Autentiserar mot ACR via den fristående identiteten
         }
       ]
     }
@@ -155,34 +206,8 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-}
-
-// ─────────────────────────────────────────────────────────────
-// RBAC: ger Container Appens Managed Identity rätt att
-// 1) hämta images från ACR, 2) läsa/skriva blobs i Storage.
-// Utan dessa startar appen men får 403 vid varje Azure-anrop.
-// ─────────────────────────────────────────────────────────────
-
-// Inbyggda roll-GUID:n — fasta i hela Azure, samma för alla prenumerationer
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, containerApp.id, acrPullRoleId)   // deterministiskt unikt namn
-  scope: acr                                            // "på ACR:et"
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: containerApp.identity.principalId       // VEM som får rollen
-    principalType: 'ServicePrincipal'
-  }
-}
-
-resource storageRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, containerApp.id, storageBlobDataContributorRoleId)
-  scope: storage                                        // "på Storage Account"
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
+  dependsOn: [
+    acrPullAssignment             // Garanterar att RBAC är klart FÖRE Container App skapas
+    storageRoleAssignment
+  ]
 }
