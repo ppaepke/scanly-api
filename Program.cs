@@ -79,7 +79,7 @@ app.MapPost("/invoices", async (HttpRequest req) =>
     fakturor[id] = r;
     return Results.Created($"/invoices/{id}", new { id, r.Status });
 })
-.WithTags("Fakturor").WithSummary("Ladda upp faktura (PDF/bild) för Document Intelligence-analys")
+.WithTags("Fakturor").WithSummary("Ladda upp faktura (PDF/bild) för Document Intelligence-analys (v2)")
 .Produces<object>(201).Produces(400).DisableAntiforgery();
 
 // ── GET /invoices/{id} ───────────────────────────────────────────
