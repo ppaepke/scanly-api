@@ -1,22 +1,21 @@
 # ─────────────────────────────────────────────────────────────
 # azure-pipelines.yml — CI/CD för Scanly API
-# Triggas vid push till main/master: bygg → testa → pusha till ACR → deploya
+# Triggas vid push till master: bygg → testa → pusha till ACR → deploya
 # ─────────────────────────────────────────────────────────────
-
+ 
 trigger:
   - master          # Detta kör pipelinen automatiskt vid push till denna branch
-
+ 
 pool:
   vmImage: 'ubuntu-latest'   # Vilken typ av "agent" (tom byggmaskin) som kör pipelinen
-
+ 
 variables:
-  azureServiceConnection: 'scanly-azure-connection'   
-  acrName: 'scanlyacrb2wli3hdd2336'                     
+  azureServiceConnection: 'scanly-azure-connection'
+  acrName: 'scanlyacrb2wli3hdd2336'
   imageName: 'scanlyapi'
   containerAppName: 'scanly-app-b2wli3hdd2336'
   resourceGroup: 'RG-Pontus-Paepke-eff47b-DotNetCloudDeveloper-VT-Mars-Goteborg'
-
-
+ 
 steps:
   # ─────────────────────────────────────────────────────────────
   # STEG 1: Logga in mot ACR via Service Connection
@@ -29,7 +28,7 @@ steps:
       scriptLocation: 'inlineScript'
       inlineScript: |
         az acr login --name $(acrName)
-
+ 
   # ─────────────────────────────────────────────────────────────
   # STEG 2: Bygger Docker-imagen
   # Samma multi-stage build som du körde lokalt.
@@ -39,17 +38,38 @@ steps:
   - script: |
       docker build -t $(acrName).azurecr.io/$(imageName):$(Build.BuildId) .
     displayName: 'Bygg Docker-image'
-
+ 
   # ─────────────────────────────────────────────────────────────
-  # STEG 3: Pushar imagen till ACR
+  # STEG 3: Testar imagen (smoke test)
+  # Startar den nybyggda containern och kollar att /health svarar.
+  # Misslyckas testet stoppas pipelinen här — inget pushas eller deployas.
+  # ─────────────────────────────────────────────────────────────
+  - script: |
+      docker run -d --name smoketest -p 8080:8080 $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        if curl --fail --silent http://localhost:8080/health; then
+          echo ""
+          echo "Smoke test OK"
+          docker stop smoketest
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "Smoke test FAILED"
+      docker logs smoketest
+      docker stop smoketest
+      exit 1
+    displayName: 'Testa: /health svarar 200'
+ 
+  # ─────────────────────────────────────────────────────────────
+  # STEG 4: Pushar imagen till ACR
   # ─────────────────────────────────────────────────────────────
   - script: |
       docker push $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
     displayName: 'Pusha till ACR'
-
-
-    # ─────────────────────────────────────────────────────────────
-  # STEG 4: Deploya till Container Apps
+ 
+  # ─────────────────────────────────────────────────────────────
+  # STEG 5: Deploya till Container Apps
   # Samma "az containerapp update" du körde manuellt förut —
   # men nu automatiskt, med varje körnings unika tagg.
   # ─────────────────────────────────────────────────────────────
