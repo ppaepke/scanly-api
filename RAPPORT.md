@@ -38,7 +38,7 @@ Microsoft Azure och skalas automatiskt vid ökad belastning.
 | Punkt | Motivering |
 |-------|-----------|
 | Produktionsgodkänd autentisering för slutanvändare | Kräver Entra ID-integration och definierade användarroller — rekommenderas inför kundlansering |
-| Automatiserade tester i pipelinen | Prioriterat bort i denna sprint till förmån för att få infrastruktur och AI-koppling på plats |
+| Utökade automatiserade tester (t.ex. enhetstester av analyslogiken) | Pipelinen kör ett enkelt test som startar imagen och kontrollerar att tjänsten svarar; djupare tester prioriterades bort i denna sprint |
 | Disaster recovery-plan | Utanför tidsscopet för denna leverans — bör definieras innan produktionssättning |
 | Strukturerad felhantering mot Document Intelligence | Fel från AI-tjänsten hanteras idag inte med egna, tydliga API-svar — rekommenderas som nästa steg |
 
@@ -132,7 +132,8 @@ secret-funktion och skrivs aldrig i klartext i kod eller kommandon.
 | **Totalt** | | **~1 930 kr/mån** |
 
 > Beräknat med 30 kunder och ~15 000 analyserade fakturor/månad, enligt
-> Azures publicerade prislistor.
+> Azures publicerade prislistor. Det motsvarar ungefär 0,13 kr per analyserad
+> faktura, varav ungefär 0,11 kr är själva AI-analysen.
 
 ### Skalningspunkt
 

@@ -26,16 +26,18 @@ onödigt arbete.
 
 Pipelinen är definierad i `azure-pipelines.yml` och startar automatiskt vid
 varje `git push` till main. Den kör på en tillfällig Ubuntu-agent i Azure
-DevOps och gör fyra saker i ordning: loggar in mot ACR via en Service
+DevOps och gör fem saker i ordning: loggar in mot ACR via en Service
 Connection, bygger en ny Docker-image med en unik tagg baserad på Azure
-DevOps eget byggnummer (`Build.BuildId`), pushar imagen till ACR, och
+DevOps eget byggnummer (`Build.BuildId`), testar imagen genom att starta
+den och kontrollera att `/health` svarar, pushar imagen till ACR, och
 uppdaterar sist Container App till att köra den nya imagen. Att varje build
 får en egen unik tagg istället för att skriva över samma version betyder att
 jag kan rulla tillbaka till en gammal, fungerande image om något går fel,
 bara genom att peka Container App mot ett äldre byggnummer. Om ett steg
-misslyckas, till exempel om Docker-bygget failar på ett kompileringsfel, så
-stoppas pipelinen där och resten av stegen körs aldrig — det bör betyda att
-den redan driftsatta appen fortsätter köra som vanligt, eftersom Container
+misslyckas, till exempel om Docker-bygget failar på ett kompileringsfel eller
+om testet inte får svar från `/health`, så stoppas pipelinen där och resten
+av stegen körs aldrig — en trasig image pushas alltså inte ens till ACR, och
+den redan driftsatta appen bör fortsätta köra som vanligt, eftersom Container
 App bara uppdateras i sista steget.
 
 ---
@@ -59,10 +61,13 @@ saknades eller behövde ändras.
 
 Jag hanterar hemligheter på två sätt. För ACR och Storage använder jag
 Managed Identity, så ingen hemlighet behöver sparas alls — appen får
-rättigheter via RBAC istället för lösenord. Nyckeln till Document
-Intelligence går inte att göra så med, den måste vara en riktig nyckel, så
-den ligger som en secret i Container App via `az containerapp secret set`
-och refereras med `secretref:` i koden, aldrig i klartext. Om en sån nyckel
+rättigheter via RBAC istället för lösenord. Document Intelligence-resursen
+skapades i förväg av någon annan, så jag kunde inte ge min identitet en roll
+på den — där använder jag därför en nyckel, som ligger som en secret i
+Container App via `az containerapp secret set` och refereras med `secretref:`
+i koden, aldrig i klartext. Koden kan använda Managed Identity även mot den
+tjänsten om nyckeln utelämnas och rollen Cognitive Services User finns, så
+det är en fråga om behörighet och inte om teknik. Om en sån nyckel
 av misstag hade legat hårdkodad i `Program.cs` och blivit committad hade
 appen i sig inte blivit åtkomlig för andra, men vem som helst med tillgång
 till repot hade kunnat använda nyckeln själv, vilket hade kunnat kosta pengar
@@ -84,11 +89,17 @@ fakturor/månad.
 | ACR (Basic) | ~50 kr | Fast månadsavgift |
 | Storage | ~5 kr | Försumbar, filerna är väldigt små |
 | Document Intelligence | ~1 600 kr | Enda posten som kostar per faktura |
+| Log Analytics | ~15 kr | Loggar från appen, små volymer |
 | **Totalt** | **~1 930 kr/mån** | |
 
 Document Intelligence är klart den dyraste resursen redan från start, för
 att den kostar per analyserad sida — de andra kostar ungefär samma oavsett
 hur mycket appen används.
+
+Per analyserad faktura blir kostnaden ungefär 0,13 kr totalt vid lansering
+(1 930 kr / 15 000 fakturor), varav ungefär 0,11 kr är själva AI-analysen.
+Vid tredubblad volym sjunker det till ungefär 0,11 kr per faktura, eftersom
+de fasta kostnaderna delas på fler fakturor.
 
 Om kundbasen tredubblas till 90 kunder (~45 000 fakturor/mån) väntar jag mig
 en totalkostnad på ungefär 5 100 kr/mån. Kostnaden tredubblas inte riktigt
